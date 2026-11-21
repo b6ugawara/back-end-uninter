@@ -7,8 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.database.database import get_db
 from app.api.dependencies import get_current_user
-from app.models import Pedido, ItemPedido, Produto, Estoque, Cliente, Cozinha
-from application.app.api.routes import cozinha
+from app.models import Pedido, ItemPedido, Produto, Estoque, Cozinha, Cliente
 
 router = APIRouter(prefix="/pedidos", tags=["Pedidos"])
 

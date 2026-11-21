@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.database.database import get_db
 from app.api.dependencies import get_current_user
-from app.models import Pedido, ItemPedido, Produto, Estoque, Cliente
-
+from app.models import Pedido, ItemPedido, Produto, Estoque, Cliente, Cozinha
+from application.app.api.routes import cozinha
 
 router = APIRouter(prefix="/pedidos", tags=["Pedidos"])
 
@@ -124,6 +124,12 @@ def criar_pedido(
 
     db.add(pedido)
     db.flush()
+
+    cozinha = Cozinha(
+    idPedido=pedido.idPedido,
+    status="AGUARDANDO"
+)
+    db.add(cozinha)
 
     for item in itens_para_salvar:
         novo_item = ItemPedido(

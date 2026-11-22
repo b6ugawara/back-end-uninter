@@ -11,6 +11,7 @@ from app.models import (
     Estoque,
     Produto,
     Usuario,
+    Unidade,
     MovimentacaoEstoque
 )
 
@@ -33,6 +34,16 @@ def consultar_estoque(
     db: Session = Depends(get_db),
     conta=Depends(verificar_perfil("GERENTE"))
 ):
+    unidade = db.query(Unidade).filter(
+        Unidade.idUnidade == unidadeId
+    ).first()
+
+    if unidade is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Unidade não encontrada"
+        )
+
     registros = (
         db.query(Estoque, Produto)
         .join(Produto, Estoque.idProduto == Produto.idProduto)
@@ -116,6 +127,32 @@ def registrar_movimentacao(
     db: Session = Depends(get_db),
     conta=Depends(verificar_perfil("GERENTE"))
 ):
+    unidade = db.query(Unidade).filter(
+        Unidade.idUnidade == dados.unidadeId
+    ).first()
+
+    if unidade is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Unidade não encontrada"
+        )
+
+    produto = db.query(Produto).filter(
+        Produto.idProduto == dados.idProduto
+    ).first()
+
+    if produto is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Produto não encontrado"
+        )
+
+    if produto.status != "ATIVO":
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível movimentar o estoque de um produto inativo"
+        )
+
     estoque = db.query(Estoque).filter(
         Estoque.idProduto == dados.idProduto,
         Estoque.idUnidade == dados.unidadeId
@@ -130,7 +167,7 @@ def registrar_movimentacao(
     if dados.tipo == "ENTRADA":
         estoque.quantidade += dados.quantidade
 
-    elif dados.tipo == "SAIDA":
+    else:
         if dados.quantidade > estoque.quantidade:
             raise HTTPException(
                 status_code=400,

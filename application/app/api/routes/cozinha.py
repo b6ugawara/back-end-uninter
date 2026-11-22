@@ -1,3 +1,4 @@
+
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -13,6 +14,8 @@ from app.models import (
     Pedido,
     ItemPedido,
     Produto,
+    Estoque,
+    MovimentacaoEstoque,
 )
 
 
@@ -32,7 +35,11 @@ def verificar_permissao_cozinha(conta, permitir_gerente=True):
 
     perfil = conta.tipo_usuario
 
-    perfis_permitidos = ["COZINHA", "GERENTE"] if permitir_gerente else ["COZINHA"]
+    perfis_permitidos = (
+        ["COZINHA", "GERENTE"]
+        if permitir_gerente
+        else ["COZINHA"]
+    )
 
     if perfil not in perfis_permitidos:
         raise HTTPException(
@@ -183,23 +190,138 @@ def atualizar_status_cozinha(
     cozinha, pedido = registro
 
     if cozinha.status == "AGUARDANDO" and dados.status == "EM_PREPARO":
-        cozinha.status = "EM_PREPARO"
-        cozinha.hora_inicio = datetime.now(timezone.utc).replace(tzinfo=None)
-        cozinha.idUsuario = conta.idUsuario
+
+        itens = (
+            db.query(ItemPedido)
+            .filter(ItemPedido.idPedido == idPedido)
+            .all()
+        )
+
+        if not itens:
+            raise HTTPException(
+                status_code=400,
+                detail="O pedido não possui itens"
+            )
+
+        # Soma quantidades de produtos repetidos no pedido.
+        quantidades = {}
+
+        for item in itens:
+            quantidades[item.idProduto] = (
+                quantidades.get(item.idProduto, 0)
+                + item.quantidade
+            )
+
+        # Verifica todo o estoque antes de realizar qualquer baixa.
+        estoques = {}
+
+        for idProduto, quantidade in quantidades.items():
+
+            estoque = (
+                db.query(Estoque)
+                .filter(
+                    Estoque.idUnidade == pedido.idUnidade,
+                    Estoque.idProduto == idProduto
+                )
+                .first()
+            )
+
+            if estoque is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Estoque não encontrado para o produto {idProduto}"
+                )
+
+            if estoque.quantidade < quantidade:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Estoque insuficiente para o produto {idProduto}. "
+                        f"Disponível: {estoque.quantidade}; "
+                        f"necessário: {quantidade}"
+                    )
+                )
+
+            estoques[idProduto] = estoque
+
+        agora = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        try:
+            # Realiza a baixa e registra cada movimentação.
+            for idProduto, quantidade in quantidades.items():
+
+                estoque = estoques[idProduto]
+
+                linhas_atualizadas = (
+                    db.query(Estoque)
+                    .filter(
+                        Estoque.idEstoque == estoque.idEstoque,
+                        Estoque.quantidade >= quantidade
+                    )
+                    .update(
+                        {
+                            Estoque.quantidade:
+                                Estoque.quantidade - quantidade
+                        },
+                        synchronize_session=False
+                    )
+                )
+
+                if linhas_atualizadas != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Estoque insuficiente ou alterado "
+                            f"para o produto {idProduto}"
+                        )
+                    )
+
+                movimentacao = MovimentacaoEstoque(
+                    idEstoque=estoque.idEstoque,
+                    idUsuario=conta.idUsuario,
+                    tipo="SAIDA",
+                    quantidade=quantidade,
+                    data_hora=agora,
+                    observacao=f"Baixa automática do pedido {idPedido}"
+                )
+
+                db.add(movimentacao)
+
+            cozinha.status = "EM_PREPARO"
+            cozinha.hora_inicio = agora
+            cozinha.idUsuario = conta.idUsuario
+            pedido.status = "EM_PREPARO"
+
+            db.commit()
+
+        except Exception:
+            db.rollback()
+            raise
 
     elif cozinha.status == "EM_PREPARO" and dados.status == "PRONTO":
-        cozinha.status = "PRONTO"
-        cozinha.hora_conclusao = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        try:
+            agora = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            cozinha.status = "PRONTO"
+            cozinha.hora_conclusao = agora
+            pedido.status = "PRONTO"
+
+            db.commit()
+
+        except Exception:
+            db.rollback()
+            raise
 
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Não é possível alterar de {cozinha.status} para {dados.status}"
+            detail=(
+                f"Não é possível alterar de "
+                f"{cozinha.status} para {dados.status}"
+            )
         )
 
-    pedido.status = cozinha.status
-
-    db.commit()
     db.refresh(cozinha)
 
     return {

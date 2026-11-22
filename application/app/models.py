@@ -1,4 +1,7 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Numeric
+from sqlalchemy import (
+    Column, Integer, String, ForeignKey, DateTime,
+    Numeric, Boolean, UniqueConstraint, CheckConstraint
+)
 from app.infrastructure.database.database import Base
 from datetime import datetime, timezone
 
@@ -30,9 +33,21 @@ class Produto(Base):
 class Estoque(Base):
     __tablename__ = "tb_estoque"
 
+    __table_args__ = (
+        UniqueConstraint(
+            "idUnidade",
+            "idProduto",
+            name="uq_estoque_unidade_produto"
+        ),
+        CheckConstraint(
+            "quantidade >= 0",
+            name="ck_estoque_quantidade"
+        )
+    )
+
     idEstoque = Column(Integer, primary_key=True, index=True)
-    idUnidade = Column(Integer, ForeignKey("tb_unidade.idUnidade"))
-    idProduto = Column(Integer, ForeignKey("tb_produto.idProduto"))
+    idUnidade = Column(Integer, ForeignKey("tb_unidade.idUnidade"), nullable=False)
+    idProduto = Column(Integer, ForeignKey("tb_produto.idProduto"), nullable=False)
     quantidade = Column(Integer, nullable=False)
 
 class Cliente(Base):
@@ -68,8 +83,12 @@ class ItemPedido(Base):
 class Pagamento(Base):
     __tablename__ = "tb_pagamento"
 
+    __table_args__ = (
+        UniqueConstraint("idPedido", name="uq_pagamento_pedido"),
+    )
+
     idPagamento = Column(Integer, primary_key=True, index=True)
-    idPedido = Column(Integer, ForeignKey("tb_pedido.idPedido"))
+    idPedido = Column(Integer, ForeignKey("tb_pedido.idPedido"), nullable=False)
     valor = Column(Numeric(10, 2), nullable=False)
     metodo_pagamento = Column(String(50), nullable=False)
     status = Column(String(30), nullable=False)
@@ -79,8 +98,12 @@ class Pagamento(Base):
 class Cozinha(Base):
     __tablename__ = "tb_cozinha"
 
+    __table_args__ = (
+        UniqueConstraint("idPedido", name="uq_cozinha_pedido"),
+    )
+
     idCozinha = Column(Integer, primary_key=True, index=True)
-    idPedido = Column(Integer, ForeignKey("tb_pedido.idPedido"))
+    idPedido = Column(Integer, ForeignKey("tb_pedido.idPedido"), nullable=False)
     idUsuario = Column(Integer, ForeignKey("tb_usuario.idUsuario"))
     status = Column(String(30), nullable=False)
     hora_inicio = Column(DateTime)
@@ -113,3 +136,68 @@ class MovimentacaoEstoque(Base):
     )
 
     observacao = Column(String(255))
+    
+    __table_args__ = (
+    CheckConstraint(
+        "quantidade > 0",
+        name="ck_movimentacao_estoque_quantidade"
+    ),
+)
+
+
+class Fidelidade(Base):
+    __tablename__ = "tb_fidelidade"
+
+    idFidelidade = Column(Integer, primary_key=True, index=True)
+    idCliente = Column(
+        Integer,
+        ForeignKey("tb_cliente.idCliente"),
+        nullable=False,
+        unique=True
+    )
+    saldo_pontos = Column(Integer, nullable=False, default=0)
+
+
+class MovimentacaoFidelidade(Base):
+    __tablename__ = "tb_movimentacao_fidelidade"
+
+    idMovimentacao = Column(Integer, primary_key=True, index=True)
+
+    idFidelidade = Column(
+        Integer,
+        ForeignKey("tb_fidelidade.idFidelidade"),
+        nullable=False
+    )
+
+    idPedido = Column(
+        Integer,
+        ForeignKey("tb_pedido.idPedido"),
+        nullable=True
+    )
+
+    tipo = Column(String(20), nullable=False)
+    pontos = Column(Integer, nullable=False)
+    descricao = Column(String(255))
+
+    data_hora = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+
+class ConsentimentoFidelidade(Base):
+    __tablename__ = "tb_consentimento_fidelidade"
+
+    idConsentimento = Column(Integer, primary_key=True, index=True)
+
+    idCliente = Column(
+        Integer,
+        ForeignKey("tb_cliente.idCliente"),
+        nullable=False,
+        unique=True
+    )
+
+    aceito = Column(Boolean, nullable=False, default=False)
+    data_aceite = Column(DateTime)
+    data_revogacao = Column(DateTime)

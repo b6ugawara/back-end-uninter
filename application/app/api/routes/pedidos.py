@@ -1,3 +1,4 @@
+
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -7,7 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.database.database import get_db
 from app.api.dependencies import get_current_user
-from app.models import Pedido, ItemPedido, Produto, Estoque, Cozinha, Cliente
+from app.models import (
+    Pedido,
+    ItemPedido,
+    Produto,
+    Estoque,
+    Cozinha,
+    Cliente,
+    Unidade
+)
 
 router = APIRouter(prefix="/pedidos", tags=["Pedidos"])
 
@@ -24,7 +33,7 @@ class PedidoRequest(BaseModel):
 
 
 def verificar_acesso_pedido(pedido, conta):
-    # Cliente só tem permissão para acessar os próprios pedidos.
+    # Cliente só acessa os próprios pedidos.
     if isinstance(conta, Cliente):
         if pedido.idCliente != conta.idCliente:
             raise HTTPException(
@@ -32,7 +41,7 @@ def verificar_acesso_pedido(pedido, conta):
                 detail="Você não tem permissão para acessar este pedido"
             )
 
-    # Atendente só pode acessar pedidos da própria unidade.
+    # Atendente só acessa pedidos da própria unidade.
     elif getattr(conta, "tipo_usuario", None) == "ATENDENTE":
         if pedido.idUnidade != conta.idUnidade:
             raise HTTPException(
@@ -56,7 +65,8 @@ def criar_pedido(
             detail="Apenas clientes e atendentes podem criar pedidos"
         )
 
-    # Cliente escolhe a unidade e atendente usa sua própria unidade registrada.
+    # Cliente escolhe a unidade.
+    # Atendente utiliza a unidade vinculada à sua conta.
     unidade_id = dados.unidadeId if eh_cliente else conta.idUnidade
 
     if unidade_id is None:
@@ -65,42 +75,59 @@ def criar_pedido(
             detail="Não foi possível identificar a unidade do pedido"
         )
 
-    # Verifica se a unidade existe.
-    from app.models import Unidade
-
     unidade = db.query(Unidade).filter(
         Unidade.idUnidade == unidade_id
     ).first()
 
     if unidade is None:
-        raise HTTPException(status_code=404, detail="Unidade não encontrada")
+        raise HTTPException(
+            status_code=404,
+            detail="Unidade não encontrada"
+        )
+
+    # Soma as quantidades de produtos repetidos.
+    quantidades_por_produto = {}
+
+    for item in dados.itens:
+        quantidades_por_produto[item.idProduto] = (
+            quantidades_por_produto.get(item.idProduto, 0)
+            + item.quantidade
+        )
 
     valor_total = Decimal("0.00")
     itens_para_salvar = []
 
-    # Valida os produtos e calcula o valor total.
-    for item in dados.itens:
+    # Valida cada produto e o total necessário em estoque.
+    for id_produto, quantidade_total in quantidades_por_produto.items():
+
         produto = db.query(Produto).filter(
-            Produto.idProduto == item.idProduto,
+            Produto.idProduto == id_produto,
             Produto.status == "ATIVO"
         ).first()
 
         if produto is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Produto {item.idProduto} não encontrado ou inativo"
+                detail=f"Produto {id_produto} não encontrado ou inativo"
             )
 
         estoque = db.query(Estoque).filter(
-            Estoque.idProduto == item.idProduto,
+            Estoque.idProduto == id_produto,
             Estoque.idUnidade == unidade_id
         ).first()
 
-        if estoque is None or estoque.quantidade < item.quantidade:
+        if estoque is None or estoque.quantidade < quantidade_total:
             raise HTTPException(
                 status_code=400,
                 detail=f"Estoque insuficiente para o produto {produto.nome}"
             )
+
+    # Calcula o valor e prepara os itens do pedido.
+    # Mantém as linhas originais enviadas na requisição.
+    for item in dados.itens:
+        produto = db.query(Produto).filter(
+            Produto.idProduto == item.idProduto
+        ).first()
 
         preco = Decimal(str(produto.preco))
         valor_total += preco * item.quantidade
@@ -111,36 +138,43 @@ def criar_pedido(
             "preco_unitario": preco
         })
 
-    pedido = Pedido(
-        idCliente=conta.idCliente if eh_cliente else None,
-        idUsuario=conta.idUsuario if eh_atendente else None,
-        idUnidade=unidade_id,
-        data_hora=datetime.now(timezone.utc).replace(tzinfo=None),
-        status="PENDENTE",
-        valor_total=valor_total,
-        canalPedido=dados.canalPedido
-    )
-
-    db.add(pedido)
-    db.flush()
-
-    cozinha = Cozinha(
-    idPedido=pedido.idPedido,
-    status="AGUARDANDO"
-)
-    db.add(cozinha)
-
-    for item in itens_para_salvar:
-        novo_item = ItemPedido(
-            idPedido=pedido.idPedido,
-            idProduto=item["idProduto"],
-            quantidade=item["quantidade"],
-            preco_unitario=item["preco_unitario"]
+    try:
+        pedido = Pedido(
+            idCliente=conta.idCliente if eh_cliente else None,
+            idUsuario=conta.idUsuario if eh_atendente else None,
+            idUnidade=unidade_id,
+            data_hora=datetime.now(timezone.utc).replace(tzinfo=None),
+            status="PENDENTE",
+            valor_total=valor_total,
+            canalPedido=dados.canalPedido
         )
-        db.add(novo_item)
 
-    db.commit()
-    db.refresh(pedido)
+        db.add(pedido)
+        db.flush()
+
+        cozinha = Cozinha(
+            idPedido=pedido.idPedido,
+            status="AGUARDANDO"
+        )
+
+        db.add(cozinha)
+
+        for item in itens_para_salvar:
+            novo_item = ItemPedido(
+                idPedido=pedido.idPedido,
+                idProduto=item["idProduto"],
+                quantidade=item["quantidade"],
+                preco_unitario=item["preco_unitario"]
+            )
+
+            db.add(novo_item)
+
+        db.commit()
+        db.refresh(pedido)
+
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "mensagem": "Pedido criado com sucesso",
@@ -163,21 +197,30 @@ def listar_pedidos(
 ):
     consulta = db.query(Pedido)
 
-    # Restringe as permissões conforme perfil do usuário.
     if isinstance(conta, Cliente):
-        consulta = consulta.filter(Pedido.idCliente == conta.idCliente)
+        consulta = consulta.filter(
+            Pedido.idCliente == conta.idCliente
+        )
 
     elif getattr(conta, "tipo_usuario", None) == "ATENDENTE":
-        consulta = consulta.filter(Pedido.idUnidade == conta.idUnidade)
+        consulta = consulta.filter(
+            Pedido.idUnidade == conta.idUnidade
+        )
 
     if canalPedido:
-        consulta = consulta.filter(Pedido.canalPedido == canalPedido)
+        consulta = consulta.filter(
+            Pedido.canalPedido == canalPedido
+        )
 
     if status:
-        consulta = consulta.filter(Pedido.status == status)
+        consulta = consulta.filter(
+            Pedido.status == status
+        )
 
     if unidadeId is not None:
-        consulta = consulta.filter(Pedido.idUnidade == unidadeId)
+        consulta = consulta.filter(
+            Pedido.idUnidade == unidadeId
+        )
 
     total = consulta.count()
 
@@ -220,13 +263,19 @@ def consultar_pedido(
     ).first()
 
     if pedido is None:
-        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+        raise HTTPException(
+            status_code=404,
+            detail="Pedido não encontrado"
+        )
 
     verificar_acesso_pedido(pedido, conta)
 
     itens = (
         db.query(ItemPedido, Produto.nome)
-        .join(Produto, ItemPedido.idProduto == Produto.idProduto)
+        .join(
+            Produto,
+            ItemPedido.idProduto == Produto.idProduto
+        )
         .filter(ItemPedido.idPedido == pedido.idPedido)
         .all()
     )
@@ -249,4 +298,93 @@ def consultar_pedido(
             }
             for item, nome in itens
         ]
+    }
+
+@router.patch("/{idPedido}/cancelar")
+def cancelar_pedido(
+    idPedido: int,
+    conta=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    pedido = (
+        db.query(Pedido)
+        .filter(Pedido.idPedido == idPedido)
+        .first()
+    )
+
+    if pedido is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Pedido não encontrado"
+        )
+
+    verificar_acesso_pedido(pedido, conta)
+
+    if pedido.status not in ["PENDENTE", "AGUARDANDO"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível cancelar este pedido"
+        )
+
+    cozinha = (
+        db.query(Cozinha)
+        .filter(Cozinha.idPedido == idPedido)
+        .first()
+    )
+
+    pedido.status = "CANCELADO"
+
+    if cozinha:
+        cozinha.status = "CANCELADO"
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "mensagem": "Pedido cancelado com sucesso",
+        "idPedido": pedido.idPedido,
+        "status": pedido.status
+    }
+
+@router.patch("/{idPedido}/entregar")
+def iniciar_entrega(
+    idPedido: int,
+    conta=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    pedido = (
+        db.query(Pedido)
+        .filter(Pedido.idPedido == idPedido)
+        .first()
+    )
+
+    if pedido is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Pedido não encontrado"
+        )
+
+    verificar_acesso_pedido(pedido, conta)
+
+    if pedido.status != "PRONTO":
+        raise HTTPException(
+            status_code=400,
+            detail="Somente pedidos prontos podem entrar em entrega"
+        )
+
+    pedido.status = "EM_ENTREGA"
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "mensagem": "Pedido saiu para entrega",
+        "idPedido": pedido.idPedido,
+        "status": pedido.status
     }

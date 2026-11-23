@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from jose import jwt
 from passlib.context import CryptContext
 
-from app.api.security import SECRET_KEY, ALGORITHM
+from app.config import SECRET_KEY, ALGORITHM
 from app.infrastructure.database.database import get_db
 from app.models import Usuario, Cliente
 

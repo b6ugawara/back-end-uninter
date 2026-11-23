@@ -71,7 +71,8 @@ try:
         cliente = Cliente(
             nome="Ana Oliveira",
             email="ana@email.com",
-            telefone="81999999999"
+            telefone="81999999999",
+            senha=pwd_context.hash("Senha123!")
         )
         db.add(cliente)
         db.flush()

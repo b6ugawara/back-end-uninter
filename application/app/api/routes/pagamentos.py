@@ -314,22 +314,10 @@ def receber_retorno_pagamento(
     except IntegrityError:
         db.rollback()
 
-        codigo_em_uso = db.query(Pagamento).filter(
-            Pagamento.codigo_transacao == codigo_transacao,
-            Pagamento.idPagamento != idPagamento
-        ).first()
-
-        if codigo_em_uso:
-            raise HTTPException(
-                status_code=409,
-                detail="Este código de transação já está associado a outro pagamento"
-            )
-
         raise HTTPException(
             status_code=409,
             detail="Conflito de integridade ao processar o pagamento"
         )
-
     except Exception:
         db.rollback()
         raise

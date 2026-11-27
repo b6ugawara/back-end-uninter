@@ -19,7 +19,7 @@ pwd_context = CryptContext(
     deprecated="auto"
 )
 
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 class LoginRequest(BaseModel):
     email: str

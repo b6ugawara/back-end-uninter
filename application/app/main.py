@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 
-from app import models
+from app.infrastructure.database.backup import realizar_backup
 from app.infrastructure.database.database import Base, engine
-
 from app.api.routes.auth import router as auth_router
 from app.api.routes.usuarios import router as usuarios_router
 from app.api.routes.unidades import router as unidades_router
@@ -15,6 +16,8 @@ from app.api.routes.cozinha import router as cozinha_router
 from app.api.routes.pagamentos import router as pagamentos_router
 from app.api.routes.fidelidade import router as fidelidade_router
 
+load_dotenv()
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -23,6 +26,27 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Background scheduler para realizar backups automáticos do banco de dados e garantir disponibilidade.
+scheduler = BackgroundScheduler()
+
+@app.on_event("startup")
+def iniciar_backup_automatico():
+    scheduler.add_job(
+        realizar_backup,
+        trigger="interval",
+        hours=24,
+        id="backup_diario",
+        replace_existing=True
+    )
+
+    scheduler.start()
+    print("Agendamento de backup iniciado.")
+
+
+@app.on_event("shutdown")
+def parar_backup_automatico():
+    if scheduler.running:
+        scheduler.shutdown()
 
 # Tratamento padronizado de HTTPException
 @app.exception_handler(HTTPException)
@@ -37,7 +61,6 @@ async def tratar_http_exception(request: Request, exc: HTTPException):
         },
         headers=exc.headers
     )
-
 
 # Tratamento padronizado de erros de validação (422)
 @app.exception_handler(RequestValidationError)
@@ -63,7 +86,6 @@ async def tratar_erro_validacao(
             }
         }
     )
-
 
 # Tratamento padronizado de erros inesperados (500)
 @app.exception_handler(Exception)

@@ -1,6 +1,7 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -28,7 +29,7 @@ class ItemPedidoRequest(BaseModel):
 
 class PedidoRequest(BaseModel):
     unidadeId: int
-    canalPedido: str = Field(min_length=1, max_length=30)
+    canalPedido: Literal["APP", "TOTEM", "BALCAO", "PICKUP", "WEB"]
     itens: list[ItemPedidoRequest] = Field(min_length=1)
 
 
@@ -151,13 +152,6 @@ def criar_pedido(
 
         db.add(pedido)
         db.flush()
-
-        cozinha = Cozinha(
-            idPedido=pedido.idPedido,
-            status="AGUARDANDO"
-        )
-
-        db.add(cozinha)
 
         for item in itens_para_salvar:
             novo_item = ItemPedido(
@@ -385,6 +379,44 @@ def iniciar_entrega(
 
     return {
         "mensagem": "Pedido saiu para entrega",
+        "idPedido": pedido.idPedido,
+        "status": pedido.status
+    }
+
+@router.patch("/{idPedido}/finalizar-entrega")
+def finalizar_entrega(
+    idPedido: int,
+    conta=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    pedido = db.query(Pedido).filter(
+        Pedido.idPedido == idPedido
+    ).first()
+
+    if pedido is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Pedido não encontrado"
+        )
+
+    verificar_acesso_pedido(pedido, conta)
+
+    if pedido.status != "EM_ENTREGA":
+        raise HTTPException(
+            status_code=400,
+            detail="Somente pedidos em entrega podem ser finalizados"
+        )
+
+    pedido.status = "ENTREGUE"
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "mensagem": "Pedido entregue com sucesso",
         "idPedido": pedido.idPedido,
         "status": pedido.status
     }

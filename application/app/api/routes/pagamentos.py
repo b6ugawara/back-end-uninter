@@ -1,6 +1,6 @@
-
 import os
 import hmac
+import uuid
 
 from datetime import datetime, timezone
 from typing import Literal
@@ -18,12 +18,12 @@ from app.models import (
     Pedido,
     Fidelidade,
     MovimentacaoFidelidade,
-    ConsentimentoFidelidade
+    ConsentimentoFidelidade,
+    Cozinha
 )
 
 
 router = APIRouter(prefix="/pagamentos", tags=["Pagamentos"])
-
 
 class CriarPagamentoRequest(BaseModel):
     idPedido: int
@@ -37,10 +37,7 @@ class CriarPagamentoRequest(BaseModel):
 
 
 class RetornoPagamentoRequest(BaseModel):
-    codigo_transacao: str = Field(min_length=1, max_length=100)
-
     status: Literal["APROVADO", "RECUSADO"]
-
 
 def verificar_permissao(conta):
     if isinstance(conta, Cliente):
@@ -87,12 +84,14 @@ def criar_pagamento(
             detail="Este pedido já possui um pagamento registrado"
         )
 
+
     pagamento = Pagamento(
         idPedido=pedido.idPedido,
         valor=pedido.valor_total,
         metodo_pagamento=dados.metodo_pagamento,
-        status="PENDENTE"
-    )
+        status="PENDENTE",
+        codigo_transacao=f"SIM-{uuid.uuid4().hex}"
+)
 
     try:
         db.add(pagamento)
@@ -197,30 +196,21 @@ def receber_retorno_pagamento(
             detail="Autenticação do webhook inválida"
         )
 
-    codigo_transacao = dados.codigo_transacao.strip()
-
-    if not codigo_transacao:
-        raise HTTPException(
-            status_code=422,
-            detail="Código da transação não pode estar vazio"
-        )
-
     agora = datetime.now(timezone.utc).replace(tzinfo=None)
 
     try:
         # Atualiza somente pagamentos ainda pendentes.
+
         resultado = db.query(Pagamento).filter(
             Pagamento.idPagamento == idPagamento,
             Pagamento.status == "PENDENTE"
         ).update(
             {
                 Pagamento.status: dados.status,
-                Pagamento.codigo_transacao: codigo_transacao,
                 Pagamento.data_pagamento: agora
             },
             synchronize_session=False
         )
-
         if resultado == 0:
             pagamento_existente = db.query(Pagamento).filter(
                 Pagamento.idPagamento == idPagamento
@@ -242,63 +232,77 @@ def receber_retorno_pagamento(
         ).first()
 
         pontos_creditados = 0
+        pedido = None
 
         if dados.status == "APROVADO":
-
             pedido = db.query(Pedido).filter(
                 Pedido.idPedido == pagamento.idPedido
             ).first()
 
-            if pedido and pedido.idCliente:
-
-                consentimento = db.query(
-                    ConsentimentoFidelidade
-                ).filter(
-                    ConsentimentoFidelidade.idCliente == pedido.idCliente,
-                    ConsentimentoFidelidade.aceito.is_(True)
+            if pedido:
+                cozinha = db.query(Cozinha).filter(
+                    Cozinha.idPedido == pedido.idPedido
                 ).first()
 
-                if consentimento:
+                if not cozinha:
+                    cozinha = Cozinha(
+                        idPedido=pedido.idPedido,
+                        status="AGUARDANDO"
+                    )
+                    db.add(cozinha)
 
-                    # Confere se o pedido já gerou pontos.
-                    credito_existente = db.query(
-                        MovimentacaoFidelidade
+                pedido.status = "AGUARDANDO"
+
+                if pedido.idCliente:
+                    consentimento = db.query(
+                        ConsentimentoFidelidade
                     ).filter(
-                        MovimentacaoFidelidade.idPedido == pedido.idPedido,
-                        MovimentacaoFidelidade.tipo == "CREDITO"
+                        ConsentimentoFidelidade.idCliente == pedido.idCliente,
+                        ConsentimentoFidelidade.aceito.is_(True)
                     ).first()
 
-                    if not credito_existente:
-
-                        fidelidade = db.query(Fidelidade).filter(
-                            Fidelidade.idCliente == pedido.idCliente
+                    if consentimento:
+                        credito_existente = db.query(
+                            MovimentacaoFidelidade
+                        ).filter(
+                            MovimentacaoFidelidade.idPedido == pedido.idPedido,
+                            MovimentacaoFidelidade.tipo == "CREDITO"
                         ).first()
 
-                        if not fidelidade:
-                            fidelidade = Fidelidade(
-                                idCliente=pedido.idCliente,
-                                saldo_pontos=0
-                            )
+                        if not credito_existente:
+                            fidelidade = db.query(Fidelidade).filter(
+                                Fidelidade.idCliente == pedido.idCliente
+                            ).first()
 
-                            db.add(fidelidade)
-                            db.flush()
+                            if not fidelidade:
+                                fidelidade = Fidelidade(
+                                    idCliente=pedido.idCliente,
+                                    saldo_pontos=0
+                                )
+                                db.add(fidelidade)
+                                db.flush()
 
-                        # Um ponto para cada R$ 1,00 completo.
-                        pontos_creditados = int(pagamento.valor)
+                            pontos_creditados = int(pagamento.valor)
 
-                        if pontos_creditados > 0:
+                            if pontos_creditados > 0:
+                                fidelidade.saldo_pontos += pontos_creditados
 
-                            fidelidade.saldo_pontos += pontos_creditados
+                                movimentacao = MovimentacaoFidelidade(
+                                    idFidelidade=fidelidade.idFidelidade,
+                                    idPedido=pedido.idPedido,
+                                    tipo="CREDITO",
+                                    pontos=pontos_creditados,
+                                    descricao="Pontos recebidos por compra"
+                                )
+                                db.add(movimentacao)
 
-                            movimentacao = MovimentacaoFidelidade(
-                                idFidelidade=fidelidade.idFidelidade,
-                                idPedido=pedido.idPedido,
-                                tipo="CREDITO",
-                                pontos=pontos_creditados,
-                                descricao="Pontos recebidos por compra"
-                            )
+        else:
+            pedido = db.query(Pedido).filter(
+                Pedido.idPedido == pagamento.idPedido
+            ).first()
 
-                            db.add(movimentacao)
+            if pedido:
+                pedido.status = "CANCELADO"
 
         db.commit()
         db.refresh(pagamento)

@@ -16,6 +16,7 @@ from app.models import (
     Produto,
     Estoque,
     MovimentacaoEstoque,
+    Pagamento
 )
 
 
@@ -190,6 +191,16 @@ def atualizar_status_cozinha(
     cozinha, pedido = registro
 
     if cozinha.status == "AGUARDANDO" and dados.status == "EM_PREPARO":
+            
+        pagamento = db.query(Pagamento).filter(
+            Pagamento.idPedido == idPedido
+        ).first()
+
+        if not pagamento or pagamento.status != "APROVADO":
+            raise HTTPException(
+                status_code=409,
+                detail="O pedido precisa ter pagamento aprovado para iniciar o preparo"
+            )
 
         itens = (
             db.query(ItemPedido)

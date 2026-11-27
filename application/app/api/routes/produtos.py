@@ -29,7 +29,7 @@ class ProdutoAtualizacao(BaseModel):
 def listar_produtos(
     unidadeId: int,
     db: Session = Depends(get_db),
-    conta=Depends(verificar_perfil("ATENDENTE", "GERENTE"))
+    conta=Depends(verificar_perfil("CLIENTE", "ATENDENTE", "GERENTE"))
 ):
     produtos = (
         db.query(Produto, Estoque.quantidade)

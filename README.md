@@ -260,18 +260,26 @@ A integração de pagamentos representa um fluxo simulado (mock), sem realizaç�
 O programa de fidelidade contempla o controle de consentimento do cliente e resgate de pontos.
 
 Existem credenciais já criadas para função de testes:
+
 Cliente:
-  "email": "marcelosantos@email.com",
-  "senha": "M@rceloTeste"
+
+"email": "marcelosantos@email.com",
+"senha": "M@rceloTeste"
+
 Atendente:
-  "email": "atendente@raizes.com",
-  "senha": "Senha123!"
+
+"email": "atendente@raizes.com",
+"senha": "Senha123!"
+
 Cozinha:
-    "email": "cozinha@raizes.com",
-    "senha": "Senha123!"
+
+"email": "cozinha@raizes.com",
+"senha": "Senha123!"
+
 Gerente:
-  "email": "gerente@raizes.com",
-  "senha": "Senha123!
+
+"email": "gerente@raizes.com",
+"senha": "Senha123!
 
 ## 11. Repositório
 
